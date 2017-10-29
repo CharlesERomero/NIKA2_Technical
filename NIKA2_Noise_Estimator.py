@@ -188,7 +188,7 @@ def nkotf_scan(XSize=8,YSize=5,PA=0,Tilt=0,Step=20.0,Speed=40.0,
                    sScan*mySign/YSpA - YSize*mySign/2
 
         if sScan % 2 == 1:
-            ssScanX = np.flip(ssScanX,0)
+            ssScanX = np.flipud(ssScanX)
             
         TimeAr = np.append(TimeAr,ssTimeAr)
         ScanX  = np.append(ScanX ,ssScanX)
@@ -751,12 +751,13 @@ def make_fits(Coverage,target="Object",mydir=cwd):
     hdu5.verify('fix')
 
     hdu1.header.add_history("Coverage maps made on "+Coverage.date_made+ ".")
-    hdu1.header.add_history("Coverage maps are for observations on "+Coverage.date_obs+ ".")
+    hdu1.header.add_history("Coverage maps are for observations on "+
+                            Coverage.date_obs.datetime.strftime("%Y-%m-%d")+ ".")
     hdulist = fits.HDUList([hdu1,hdu2,hdu3,hdu4,hdu5])
     hdulist.info()
     filename="Coverage_Maps_"+target+".fits"
     fullpath = os.path.join(mydir,filename)
-    hdulist.writeto(fullpath,overwrite=True,output_verify="exception")
+    hdulist.writeto(fullpath,clobber=True,output_verify="exception")
 
 def shelve_coverage(Coverage,filename='Shelved_Coverage.sav',mydir=cwd):
 
@@ -1000,7 +1001,7 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
                   myfontsize=myfontsize,band="2mm",cblim=True,addtext=True,secObj=secObj,thiObj=thiObj,
                   fouObj=fouObj,format=format,mydir=mydir)
 
-def plot_visibility(mydate,skyobj,Coverage=None,elMin=40,mylabel="Target",
+def plot_visibility(mydate,skyobj,Coverage=0,elMin=40,mylabel="Target",
                     dpi=200,filename = "Visibility_Chart",format='png',
                     myloc=thirtym,mydir=cwd):
 
@@ -1047,7 +1048,7 @@ def plot_visibility(mydate,skyobj,Coverage=None,elMin=40,mylabel="Target",
 
     
     gi = np.array([])
-    if Coverage != None:
+    if isinstance(Coverage,NNE.CovMap):
         for start,stop in zip(Coverage.scanstart,Coverage.scanstop):
             mgi = np.where(((mytimes > start) & (mytimes < stop)) == True)
             gi = np.append(gi,mgi)
