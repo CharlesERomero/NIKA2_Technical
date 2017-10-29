@@ -1,56 +1,54 @@
-import Coord_Transforms as CT
+import NIKA2_Noise_Estimator as NNE
 import astropy.coordinates as apc
 import numpy as np
 from astropy import units as u
+from datetime import datetime
 
+##############################################################
+### Define the coordinates and name of your object:
 obj_ra = apc.Angle('12h00m00s')
-ojb_dec= apc.Angle('+30d00m00s')
-ojbsky = apc.SkyCoord(obj_ra, obj_dec, equinox = 'J2000')
+obj_dec= apc.Angle('+30d00m00s')
+skyobj = apc.SkyCoord(obj_ra, obj_dec, equinox = 'J2000')
+target='MyObjectName'
 
-tObs = 400*u.min # I'm currently not using this variable.
-#nkotf = CT.nkotf_parameters(XSize=5,YSize=4,PA=0,Tilt=0,Step=10.0,Speed=30.0,
-#                            CoordSys='azel',fSamp=20.0)
-##### Nico's script:
-nkotf = CT.nkotf_parameters(XSize=8.0,YSize=5.0,PA=0,Tilt=0,Step=20.0,Speed=40.0,
+### Define how you are observing your object:
+tInt  = 10*u.min    # How much integration time do you want?
+elMin = 40          # Minimum elevation (degrees)
+nkotf = NNE.nkotf_parameters(XSize=8.0,YSize=5.0,PA=0,Tilt=0,Step=20.0,Speed=40.0,
                             CoordSys='azel',fSamp=20.0)
-#nkotf = CT.nkotf_parameters(XSize=12,YSize=5,PA=0,Tilt=0,Step=10.0,Speed=60.0,
-#                            CoordSys='azel',fSamp=20.0)
-### I can leave the line below as a commented line for any publicly avaible sample code
-pwv = CT.pwv_from_225(0.25) # 20-Oct-2017 reading
-pwv = 4.0       # Assume marginal weather.
-target='Abell_2443'
+scanStrat = [nkotf] # Make a list of your scan strategy(ies).
 
-##############################################################
-Coverage=CT.Multiple_Scans(tObs,a2443sky,nkotf=nkotf,pwv=pwv,elMin=45,doPlot=False)
-CT.plot_coverage(Coverage,filename=target+"_above45",target=target)
-#                   secObj=g1200p1sky)
-CT.plot_visibility(Coverage.date_obs,a2443sky,Coverage,mylabel=target,
-                   elMin=45,filename = target+"_Visibility_above45")
-CT.hist_pas(Coverage,addname=target)
-#CT.make_fits(Coverage,target=target+"_A2443_full_night")
+### Define the conditions (as governed by precipitable water vapor):
+### You may give pwv directly as the millimeters of pwv, or
+### you may calculate from Tau_225 (the taumeter from the IRAM 30m).
+pwv       = NNE.pwv_from_t225(0.3)     # Generally good weather
+date_obs  = datetime.strptime('02-07-2019 19:24:08', '%d-%m-%Y %H:%M:%S')
+precStart = False
 
-##############################################################
-Coverage = CT.Single_Scan(g2sky,nkotf=nkotf,pwv=pwv,elMin=30)
-CT.plot_coverage(Coverage,filename=target+"_coverage_1scan",target=target,
-                 secObj=g1200p1sky)
-CT.plot_visibility(mydate,g2sky,Coverage,mylabel=target,
-                   filename = target+"_Visibility_Chart_v3")
+########################################################################
+###    The user should not need to modify anything below here.       ###
+########################################################################
 
-##############################################################
-target='Abell_2443'
-Coverage = CT.Single_Scan(a2443sky,nkotf=nkotf,pwv=pwv,elMin=45)
-CT.plot_coverage(Coverage,filename=target+"_coverage_1scan",target=target)
-CT.plot_visibility(Coverage.date_obs,a2443sky,Coverage,mylabel=target,
-                   elMin=45,filename = target+"_Visibility_Chart_v3")
+### doPlot keyword is almost deprecated...
+Coverage=NNE.Observe_Object(skyobj, nkotf=scanStrat, date=date_obs,
+                            precStart=precStart,elMin=elMin,
+                            tInt=tInt, pwv=pwv,doPlot=False)
 
-#goodMin, mydate = CT.find_good_times(elMin=40.0,skyobj=a2443sky)
-#CT.plot_visibility(mydate,a2443sky,mylabel="Abell_2443",filename = "A2443_Visibility_Chart_v2")
-#TimeAr, ScanX, ScanY = CT.nkotf_scan()
-#tStart = CT.create_mytime(mydate,np.min(goodMin))
-#RaDecs, ScanAltAz = CT.altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,obj=a2443sky)
-#CT.plot_radecs(RaDecs,span=600)
-#Coverage=None
-#Coverage=CT.coverage_map(RaDecs,Coverage=Coverage)
-#CT.plot_coverage(Coverage,filename="Abell_2443_coverage_1scan")
-#CT.make_fits(Coverage,target="Abell 2443")
-CT=reload(CT)
+elStr = str(int(elMin))
+########################################################################
+### The following modules ALL require the variable <Coverage>.
+###
+### This plots 5 different maps:
+NNE.plot_coverage(Coverage,filename=target+"_above"+elStr,target=target)
+
+### This makes one plot- the visibility of the object:
+NNE.plot_visibility(Coverage.date_obs,skyobj,Coverage,elMin=elMin,
+                    mylabel=target,filename = target+"_Visibility_above"+elStr)
+
+### This makes one plot- a histogram of parallactic angles:
+NNE.hist_pas(Coverage,addname=target)
+
+### This writes a fits file with the 5 maps plotted in the plot_coverage
+NNE.make_fits(Coverage,target=target+"_full_night")
+
+########################################################################

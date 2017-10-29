@@ -1,137 +1,144 @@
 import numpy as np
-import astropy.coordinates as apc
+import astropy.coordinates as apc  # http://www.astropy.org/
 from astropy import wcs
 from astropy.io import fits
 from astropy import units as u
 from astropy.time import Time as APT
-import time
-from wcsaxes import WCSAxes  # http://wcsaxes.rtfd.org/
+from wcsaxes import WCSAxes        # http://wcsaxes.rtfd.org/
 import matplotlib.pyplot as plt
 import matplotlib.dates
 from matplotlib import colors
 from matplotlib import colorbar as cb
-import os
-import datetime
-#from astropy.wcs.utils import celestial_frame_to_wcs
+import pytz, datetime, os
 
-tmlon = apc.Angle('3:23:55.51 degrees')
-tmlat = apc.Angle('37:04:06.29 degrees')
-tmalt = 2850.0 * u.m    
+################################################################################
+
+### Relevant values for IRAM 30-meter telescope:
+tmlon = apc.Angle('3:23:55.51 degrees')    # Longitude
+tmlat = apc.Angle('37:04:06.29 degrees')   # Latitude
+tmalt = 2850.0 * u.m                       # Altitude (meters)
+tmpre = 740.0  * u.Pa                      # Pressure (Pascals)
+### Create a Earth-Location object:
 thirtym = apc.EarthLocation.from_geodetic(tmlon,tmlat, tmalt)
-utcoffset = 2.0*u.hour
-mydate  = time.strftime("%Y-%m-%d")
-mytoday = mydate
 
 ### Should deprecate this. Looks about ready for deprecation.
 def_ra = apc.Angle('12h00m00.0s')
 def_dec= apc.Angle('37d00m00s')   # Will need to incorporate elevation limits
 defsky = apc.SkyCoord(def_ra, def_dec, equinox = 'J2000')
 
-ra=apc.Angle('0h0m0s')
-dec= apc.Angle('0d0m0s')
-equinox='J2000'
+### Where to write files (by default)
 cwd    = os.getcwd()  # Get current working directory
 
-def 225_from_pwv(pwv):
+################################################################################
+### Time-manipulation
+
+def get_dt(tz="Europe/Madrid"):
+    local = pytz.timezone (tz)
+    my_dt = datetime.datetime.now()
+    #   test_dt = my_dt + datetime.timedelta(days=2)
+    #   local_dt = local.localize(test_dt, is_dst=None)
+    local_dt = local.localize(my_dt, is_dst=None)
+    utc_dt = local_dt.astimezone (pytz.utc)
+
+    return utc_dt
+
+def astropyTime_from_datetime(dt):
+
+    myAPT = APT(dt.strftime("%Y-%m-%d %H:%M:%S"))
+
+    return myAPT
+
+################################################################################
+### Some simple PWV-to 
+
+def t225_from_pwv(pwv):
 
     tau = pwv*0.058 + 0.004
 
     return tau
 
-def pwv_from_225(tau_225):
+def pwv_from_t225(tau_225):
 
     pwv = (tau_225 - 0.004)/0.058
 
     return pwv
 
-def create_mytime(mydate,myminute,utcoffset=2.0*u.hour):
+################################################################################
+### Astrometry Routines
+
+def get_parallactic_angle(ha, dec, lat=tmlat):
+    """
+    Calculates the parallactic angle. Many astronomy books will provide info,
+    or for info easily retrieved on the internet, look here:
+    http://www.gb.nrao.edu/~rcreager/GBTMetrology/140ft/l0058/gbtmemo52/memo52.html
+
+    ---------------
+    INPUTS:
+    ha:         Hour angle of the source (RA - LST)
+    dec:        Declination of the source
+    lat:        Latitude of the observing site
+
+    """
     
-    hours = int(myminute/60.0)
-    addday = int(hours/24)
-    hours  = hours % 24
-    minutes = int(myminute) - hours*60 - addday*24*60
-    seconds = int((minutes*60)%60)
-    hms = "%02d:%02d:%02d" % (hours,minutes,seconds)
-    mytime = APT(mydate+' '+hms) - utcoffset
-    mytime = mytime + addday*u.day
+    #pa = np.arctan(np.cos(lat)*np.sin(az), 
+    #               np.sin(lat)*np.cos(el) - np.cos(lat)*np.sin(el)*np.cos(az))
+    pa = np.arctan(np.sin(ha)/(np.cos(dec)*np.tan(lat)-np.sin(dec)*np.cos(ha)))
+
+    ### If we needed something beyond +/- pi/2:
+    #pa = np.arctan2(np.sin(ha),np.cos(dec)*np.tan(lat)-np.sin(dec)*np.cos(ha))
+
+    return pa
+
+def find_transit(skyobj,myAPT,myloc):
+
+    mylon   = myloc.to_geodetic()[0]
+    mylst   = myAPT.sidereal_time('apparent',longitude=mylon)
+    ha      = (skyobj.ra - mylst).to("hourangle").value * u.hour
+    Transit = myAPT + ha
+
+    return Transit
+
+def find_times_above_el(skyobj,myAPT,myloc,elMin=40):
+
+    Transit  = find_transit(skyobj,myAPT,myloc)
+    npts     = 1000
+    dTransit = np.linspace(-12, 12, npts)*u.hour
+    mytimes  = Transit + dTransit
+    ### Can delete the line below, and move to the plotting routine.
+    dt_arr   = mytimes.datetime    # Datetime array - for plotting...
+
+    myframe  = apc.AltAz(obstime=mytimes, location=myloc)
+    objaltazs = skyobj.transform_to(myframe)
     
-    return mytime
+    GoodEl = (objaltazs.alt.value > elMin)
+    elStart= np.min(mytimes[GoodEl])
+    elStop = np.max(mytimes[GoodEl])
 
-def find_transit(skyobj,date,utcoffset=2.0*u.hour):
+    return elStart, elStop, mytimes
 
-    ntimes=48 # Every half hour
-    midnight = create_mytime(date,0,utcoffset)
-    delta_midnight = np.linspace(0, 24, ntimes)*u.hour
-    mytimes = midnight + delta_midnight
-    objaltaz = skyobj.transform_to(apc.AltAz(obstime=mytimes,location=thirtym))
-    myels = (objaltaz.alt).to('deg').value
+########################################################################################
+### Scanning-related modules:
 
-    bestind = np.where(objaltaz.alt == np.max(objaltaz.alt))
-    besttime= mytimes[bestind]
+class nkotf_parameters:
 
-    return besttime
+    def __init__(self,XSize=8,YSize=5,PA=0,Tilt=0,Step=20.0,Speed=40.0,
+                 CoordSys="azel",fSamp=20.0):
 
-def find_good_times(elMin=40,skyobj=None,date=None):
+        self.XSize = XSize
+        self.YSize = YSize
+        self.PA    = PA
+        self.Tilt  = Tilt
+        self.Step  = Step
+        self.Speed = Speed
+        self.CoordSys=CoordSys
+        self.fSamp = fSamp
 
-    ra = def_ra   # Will want to delete this...
-    dec=def_dec   # Will want to delete this...
+        print "Using the following parameters:"
+        print "XSize = ",XSize," arcminutes; YSize = ",YSize," arcminutes"
+        print "PA =", PA," degrees; Tilt = ",Tilt," degrees"
+        print "Step = ",Step," arcseconds; Speed = ",Speed," arcseconds/second"
+        print "in the "+CoordSys+" coordinate system."
 
-    if skyobj == None:
-        mysky = apc.SkyCoord(ra, dec, equinox = equinox)
-    else:
-        mysky = skyobj
-        
-    if (date == None):
-        mydate  = time.strftime("%Y-%m-%d")
-    else:
-        mydate = date
-
-    scandur= 5.0 # minutes
-    ntimes = int(24*60.0/scandur)
-    myels = np.zeros(ntimes)
-
-    bestdate = find_transit(skyobj,mydate)
-    
-#    midnight = create_mytime(mydate,0,utcoffset=utcoffset)
-    delta_besttime = np.linspace(-12, 12, ntimes)*u.hour
-    mytimes = bestdate + delta_besttime
-    objaltaz = mysky.transform_to(apc.AltAz(obstime=mytimes,location=thirtym))
-    myels = (objaltaz.alt).to('deg').value
-    
-######################################################################
-#    for sCount in range(ntimes):
-#        myminute = sCount*scandur
-#        mytime = create_mytime(mydate,myminute,utcoffset=utcoffset)
-#        
-#        defaltaz = mysky.transform_to(apc.AltAz(obstime=mytime,location=thirtym))
-#
-#        myels[sCount] = ((defaltaz.alt).to('deg')).value
-######################################################################
-
-    goodEl = (myels > elMin)
-    myGoodEl = myels[goodEl]
-    myGoodT = len(myGoodEl)*scandur
-
-    goodMin = np.arange(ntimes)[goodEl] * scandur
-    # Maybe we want to track the object from its rise to its set.
-    goodMin = resolve_midnight(goodMin)
-
-#    import pdb;pdb.set_trace()
-    goodStart = mytimes[np.min(np.where(goodEl == True))]
-
-    ### I think I want to return myGoodT instead of goodMin
-    return goodMin, mydate, goodStart
-
-def resolve_midnight(goodMin):
-
-    myshift = goodMin - np.roll(goodMin,1)
-    mystep  = np.median(myshift)
-    mybreaks= (myshift != mystep)
-    mybrmin = goodMin[mybreaks]
-    goodMorn= (goodMin < np.max(mybrmin))
-    mynewMin= np.append(goodMin[~goodMorn],goodMin[goodMorn]+24*60.0)
-
-    return mynewMin
 
 def nkotf_scan(XSize=8,YSize=5,PA=0,Tilt=0,Step=20.0,Speed=40.0,
                CoordSys="azel",fSamp=20.0):
@@ -195,7 +202,10 @@ def nkotf_scan(XSize=8,YSize=5,PA=0,Tilt=0,Step=20.0,Speed=40.0,
         
     return TimeAr, ScanX, ScanY
 
-def altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,location=thirtym,
+########################################################################################
+### A major computational chunk is here: transforming from alt-az to ra-dec.
+
+def altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,nkotf,location=thirtym,
                      obj=defsky,doPlot = False):
 
     ScanTime = TimeAr*u.s + tStart
@@ -203,41 +213,26 @@ def altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,location=thirtym,
     objaltaz = obj.transform_to(apc.AltAz(obstime=ScanTime,location=location))
     AltObj = objaltaz.alt
     AzObj  = objaltaz.az
-    # Cross-Elevation to actual Azimuth offsets + Azimuth_0
-    ScanAz   = (ScanX/60.0)*u.deg/np.cos(AltObj) + AzObj
-    # And actual elevations of the scan
-    ScanEl   = (ScanY/60.0)*u.deg + AltObj
 
-    ScanAltAz = apc.AltAz(ScanAz,ScanEl,obstime=ScanTime,location=location)
-    
-    #######################################################################
-    ### TESTING
-
-    TestAz    = AzObj + ScanX*0*u.deg
-    TestEl    = AltObj+ ScanY*0*u.deg
-    TestAltAz = apc.AltAz(TestAz,TestEl,obstime=ScanTime,location=location)
-    TestRaDec = TestAltAz.transform_to(apc.ICRS)
-
-#    print TestRaDec.ra.value[:250]
-#    print TestRaDec.dec.value[:250]
-#    import pdb; pdb.set_trace()
-
-    if doPlot == True:
-        plt.figure()
-        plt.plot(ScanAz.value,ScanEl.value,'.')
-        filename = "AltAz_map_v2";fullbase = os.path.join(cwd,filename)
-        fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
-        plt.savefig(fulleps,format='eps'); plt.savefig(fullpng,format='png')
+    if nkotf.CoordSys.lower() == 'azel'.lower():
         
-        plt.figure()
-        plt.plot(TestRaDec.ra.value,TestRaDec.dec.value,'.')
-        filename = "TestRaDec_map_v2";fullbase = os.path.join(cwd,filename)
-        fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
-        plt.savefig(fulleps,format='eps'); plt.savefig(fullpng,format='png')
+        ScanAz   = (ScanX/60.0)*u.deg/np.cos(AltObj) + AzObj
+        ScanEl   = (ScanY/60.0)*u.deg + AltObj
+        ScanAltAz = apc.AltAz(ScanAz,ScanEl,obstime=ScanTime,location=location)
+        RaDecs = ScanAltAz.transform_to(apc.ICRS)
 
-    RaDecs = ScanAltAz.transform_to(apc.ICRS)
+    else:
+
+        # This is at all true! But, this is only used for extinction correction.
+        ScanAltAz = objaltaz  
+        ScanRa    = (ScanX/60.0)*u.deg/np.cos(obj.dec) + obj.ra
+        ScanDec   = (ScanY/60.0)*u.deg + obj.dec
+        RaDecs    = apc.SkyCoord(ScanRa, ScanDec, equinox = 'J2000')
 
     return RaDecs, ScanAltAz
+
+########################################################################################
+### Some utility modules:
 
 def get_RaDec_range(RaDec,span=600):
 
@@ -257,24 +252,21 @@ int_arr = np.vectorize(int_scalar)
 def create_wcs(PixS,avgRA,avgDEC,Xcen,Ycen):
 
     RAdelt = -PixS.to("deg"); DECdelt = PixS.to("deg")
-#    w = wcs.wcs.utils.celestial_frame_to_wcs(wcs.ICRS(), projection='TAN')
     w = wcs.WCS(naxis=2)
     # Set up an "gnomic" projection
     # Vector properties may be set with Python lists, or Numpy arrays
-#    import pdb; pdb.set_trace()
     w.wcs.crpix = [Xcen,Ycen] #[avgRA.value,avgDEC.value]
     w.wcs.cdelt = np.array([RAdelt.value,DECdelt.value])
     w.wcs.crval = [avgRA.value,avgDEC.value] #[Xcen,Ycen]
     w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-#    w.wcs.set_pv([(2,1,45.0)]) # phip, phi0, and theta0 ???
     
     return w
 
 class CovMap:
     
     def __init__(self,in_map, ra0, dec0, pixs,myFOVx,myFOVy,nFOVpix,
-                 avgRA,avgDEC,w,radmap,nkotf,
-                 coordsys='RaDec',date_made=None,date_obs=None,notes=None):
+                 avgRA,avgDEC,w,radmap,nkotf,date_obs,
+                 coordsys='RaDec',notes=None):
         
         self.time   = in_map   # This should stay as a time map (in seconds)
         xsz,ysz     = in_map.shape
@@ -302,26 +294,24 @@ class CovMap:
         self.scanpwv=  np.array([])
         self.scantau1mm = np.array([])
         self.scantau2mm = np.array([])
-        self.scanstart = np.array([])
-        self.scanstop  = np.array([])
+        self.scanstart  = np.array([])
+        self.scanstop   = np.array([])
         self.scanPA = np.array([])
 
         ### Some housekeeping info:
-        if date_made == None:
-            date_made = mytoday
-        if date_obs == None:
-            date_obs = mydate
-        self.date_made = date_made
+        self.date_made = get_dt("Europe/Madrid").strftime("%Y-%m-%d")
         self.date_obs  = date_obs
         if not (notes == None):
             self.notes = notes
         else:
             self.notes = "No comments left."
 
+########################################################################################
+### The workhorse routine
 
 def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
                  FoV=6.5,PixS=3.0*u.arcsec,span=None,
-                 Coverage=None,fSamp=20.0,pwv=4):
+                 Coverage=None,fSamp=20.0,pwv=4,myloc=thirtym):
     """
     This is a workhorse script which takes a structure comprised of an array of
     RA positions and an array of Dec positions and creates a map of pixels with
@@ -346,7 +336,7 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
     Elevation: Telescope elevation angle (!not altitude in meters!)
 
     """
-    RaDecs, ScanAltAz = altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,obj=obj)
+    RaDecs, ScanAltAz = altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,nkotf,obj=obj)
 
 #    int_arr = np.vectorize(int_scalar)
     Elevation=ScanAltAz.alt
@@ -356,23 +346,28 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
     Tau1mm =opacity_by_band(band="1mm",pwv=pwv)
     Tau2mm =opacity_by_band(band="2mm",pwv=pwv)
 
-    delRa = (RaDecs.ra - np.roll(RaDecs.ra,1)).to('arcsec').value
-    delDec= (RaDecs.dec- np.roll(RaDecs.dec,1)).to('arcsec').value
-    negdRa= np.median(delRa[(delRa < 0)])
-    posdRa= np.median(delRa[(delRa > 0)])
-    negdDec=np.median(delDec[(delRa < 0)])
-    posdDec=np.median(delDec[(delRa > 0)])
-    scPA = np.arctan2(negdRa,negdDec)*(u.rad).to("deg")
-    scPA2= np.arctan2(posdRa,posdDec)*(u.rad).to("deg")
+    delRa  = (RaDecs.ra - np.roll(RaDecs.ra,1)).to('arcsec').value
+    delDec = (RaDecs.dec- np.roll(RaDecs.dec,1)).to('arcsec').value
+    negdRa = np.median(delRa[(delRa < 0)])
+    posdRa = np.median(delRa[(delRa > 0)])
+    negdDec= np.median(delDec[(delRa < 0)])
+    posdDec= np.median(delDec[(delRa > 0)])
+    scPA   = np.arctan2(negdRa,negdDec)*(u.rad).to("deg")
+    scPA2  = np.arctan2(posdRa,posdDec)*(u.rad).to("deg")
 
     if (scPA > 0) and (scPA < 180):
-        myPA = scPA
+        myPA = 90.0 - scPA  
     else:
-        myPA = scPA2
-        
-#    import pdb;pdb.set_trace()
+        myPA = 90.0 -scPA2 
 
-    #scanlen = np.max([nkotf.XSize,nkotf.YSize])/2.0
+    ### Checking my parallactic angle calculations...
+    #tMid    = tStart + np.median(TimeAr)*u.s
+    #mylon   = myloc.to_geodetic()[0]
+    #mylst   = tMid.sidereal_time('apparent',longitude=mylon)
+    #ha      = (obj.ra - mylst).to("hourangle")
+    #ParAng = get_parallactic_angle(ha,obj.dec)
+    #print myPA, ParAng.to("deg")
+
     scanlen = ((nkotf.XSize/2.0)**2 + (nkotf.YSize/2.0)**2)**0.5
     scanext = scanlen + FoV/1.5
     mybuffer= 1.6
@@ -386,8 +381,8 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
     if Coverage == None:
         avgRA ,avgDEC  = np.mean(RaDecs.ra),np.mean(RaDecs.dec)
         nXpix  = int((2*span/PixS).value) ; nYpix = int((2*span/PixS).value)
-        print 'Span = ',span
-        print nXpix,nYpix
+        #print 'Span = ',span
+        #print nXpix,nYpix
 
         XXarr  = (nXpix/2.0 - np.arange(nXpix))*PixS  # Sky-right coordinates
         YYarr  = (np.arange(nYpix)-nYpix/2.0)*PixS
@@ -407,9 +402,8 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
         Xcen = nXpix/2.0; Ycen = nYpix/2.0
 
         w = create_wcs(PixS,avgRA,avgDEC,Xcen,Ycen)
-        
         Coverage = CovMap(RAmap.value*0.0,refRA,refDEC,PixS,myFOVx,myFOVy,nFOVpix,
-                          avgRA,avgDEC,w,RRmap,nkotf)
+                          avgRA,avgDEC,w,RRmap,nkotf,tStart)
 
         ################################################################
         ### This requires too much memory.
@@ -448,11 +442,7 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
         Coverage.time[hitmap] += 1.0/fSamp
         Coverage.weight1mm[hitmap] += 1.0/(fSamp*(ExtCorr1mm.value[i])**2)
         Coverage.weight2mm[hitmap] += 1.0/(fSamp*(ExtCorr2mm.value[i])**2)
-        
-#        if i % 100 == 0:
-#            print np.sum(Coverage.time)/(len(Coverage.myFOVy)*i/fSamp)
-#            pdb.set_trace()
-            
+                    
         Coverage.tint += (1.0/fSamp)*u.s
 
     return Coverage
@@ -477,39 +467,108 @@ class nkotf_parameters:
         print "Step = ",Step," arcseconds; Speed = ",Speed," arcseconds/second"
         print "in the "+CoordSys+" coordinate system."
 
-def Single_Scan(skyobj, nkotf=None, date=None, doPlot=False, pwv=4,elMin=40,
-                **kwargs):
+#############################################################################################
+#############################################################################################
 
-    goodMin, mydate,goodStart = find_good_times(elMin=elMin,skyobj=skyobj,date=date)
-    time_per_day    = (np.max(goodMin) - np.min(goodMin))*u.min
+def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
+                   tInt=24.0*60.0*u.min, pwv=5,doPlot=False, **kwargs):
+    
+    """
+    This is the main program that is called by the astronomer.
+    
+
+
+    ------------------
+    INPUTS:
+
+    skyobj:           A sky object, largely just its RA and DEC
+    nkotf:            A dictionary/object containing parameters used in an nkotf scan
+                      **NOTE** This can also be an array or list of such objects
+    date:             A datetime object, in UTC. If none, today is assumed
+    precStart:        Set to True if you want your observations to start EXACTLY at the
+                      datetime you specify (again, UTC), or if unspecified, then moment that
+                      you call this module. Otherwise, scans will start when
+                      the object rises above elMin.
+    elMin:            Minimum elevation (in degrees, but in Python, just given as a value)
+    tInt:             Total *integration* time, in minutes (Does NOT include overhead)!
+    pwv:              Precipitable Water Vapor (in mm).
+    doPlot:           Depricated???
+
+    ------------------
+    NOTES:
+
+    If you wish to observe with many different types of scans, which may depend on elevation,
+    opacity, or other variables, this is left to the astronomer to identify when these conditions
+    are met, and the astronomer can use the variables <precStart> and <tInt> to constrain the
+    times of these observations.
+
+    Currently, there is not a check that one scan is larger than tInt. It will complete, and then
+    break from the loop. That is, beware that completion does NOT mean exact compliance with the
+    input tInt.
+
+    """
+    
+    if date == None:
+        date = get_dt("Europe/Madrid")      # Currently only made for use with IRAM 30m
+
+    myAPT   = astropyTime_from_datetime(date)    
+    elStart, elStop, mytimes = find_times_above_el(skyobj,myAPT,thirtym,elMin=elMin)
+    time_per_day = (elStop - elStart).to("minute")
+
+    if precStart == True:
+        if elStart < myAPT:
+            elStart = myAPT
+        else:
+            raise Exception("Your precise start date is below the minimum elevation."+
+                            "Please change elMin to a lower elevation.")
+       
     if nkotf == None:
         nkotf = nkotf_parameters(**kwargs)
-    TimeAr, ScanX, ScanY = nkotf_scan(XSize=nkotf.XSize,YSize=nkotf.YSize,PA=nkotf.PA,
-                                      Tilt=nkotf.Tilt, Step=nkotf.Step, Speed=nkotf.Speed,
-                                      fSamp=nkotf.fSamp)
-    time_per_scan   = (np.max(TimeAr) - np.min(TimeAr))*u.s
-    tpS_w_overhead  = (time_per_scan*1.1).to("min")
 
-    ### If I wanted to try to simulate exactly the overhead (pointings, focus)
-    ### I might want to take breaks every hour and every 2-3 hours.
-    ### But I will hold off on this.
-    ScansperHour    = int(((1.0*u.hour)/tpS_w_overhead).decompose().value)
-    ScansperDay     = int(((time_per_day)/tpS_w_overhead).decompose().value)
-    Coverage = None
+    ObsValid = True     #
+    Coverage = None     #
+    timeInte = 0.0      # Set my integration time to zero
+    tStart   = elStart  # The start of a given scan.
+    Nloop    = 0
+    Nscans   = 0
+
+    ### If anyone is bold enough to predict how pwv changes with time, you could move this
+    ### inside the loops.
+    
     NEFD1mm, eta1mm, Tau1mm = values_by_band(band="1mm",pwv=pwv)
     NEFD2mm, eta2mm, Tau2mm = values_by_band(band="2mm",pwv=pwv)
 
-    ScanNum = 0
-    ### The starting Minute:
-    MinStart = np.min(goodMin) + (ScanNum*tpS_w_overhead).to("min").value
-    ### The starting time (date + hour,min,second):
-    tStart = create_mytime(mydate,MinStart)
-    tStart = goodStart     # This should be the better way to do it...
-    if doPlot == True:
-        plot_radecs(RaDecs)
-    Coverage = coverage_map(tStart,nkotf,skyobj,TimeAr, ScanX, ScanY,
-                            Coverage=Coverage,pwv=pwv)
-    print "Scan "+str(ScanNum)+" of "+str(ScansperDay)
+    while ObsValid:
+        
+        for mynkotf in nkotf:
+            TimeAr, ScanX, ScanY = nkotf_scan(XSize=mynkotf.XSize,YSize=mynkotf.YSize,PA=mynkotf.PA,
+                                              Tilt=mynkotf.Tilt, Step=mynkotf.Step, Speed=mynkotf.Speed,
+                                              fSamp=mynkotf.fSamp)
+            WallTime   = (np.max(TimeAr) - np.min(TimeAr))*u.s
+            Coverage = coverage_map(tStart,mynkotf,skyobj,TimeAr, ScanX, ScanY,
+                                    Coverage=Coverage,pwv=pwv)
+            tStart  += WallTime
+            Nscans  += 1
+            ObsValid = (tStart < elStop) & (Coverage.tint < tInt)
+
+            
+            if ObsValid:
+                tRemainingEl = (elStop - tStart).value * (u.day.to("min"))
+                tRemainingInt = (tInt - Coverage.tint).to("min").value
+                tRemaining = np.min([tRemainingEl,tRemainingInt])
+                StrRem ="{:.2f}".format(tRemaining) + ' minutes'
+                StrInt = "{:.2f}".format(Coverage.tint.to("min").value)+" minutes"
+                print 'Completed ',Nscans,' scan so far (tInt = '+StrInt+'); '+StrRem+' remaining'
+            else:
+                StrInt = "{:.2f}".format(Coverage.tint.to("min").value)+" minutes"
+                print 'Completed ',Nscans,' scan so far (tInt = '+StrInt+'); this is the last scan.'
+                break 
+
+            if doPlot == True:
+                plot_radecs(RaDecs)
+                import pdb; pdb.set_trace()
+
+        Nloop+=1
 
     Coverage.weight1mm *= eta1mm/(NEFD1mm**2)
     Coverage.weight2mm *= eta2mm/(NEFD2mm**2)
@@ -519,98 +578,9 @@ def Single_Scan(skyobj, nkotf=None, date=None, doPlot=False, pwv=4,elMin=40,
 
     return Coverage
 
-def Multiple_Scans(tObs, skyobj, nkotf=None, date=None, doPlot=False, pwv=4,elMin=40,
-                   **kwargs):
-
-    goodMin, mydate,goodStart = find_good_times(elMin=elMin,skyobj=skyobj,date=date)
-    time_per_day    = (np.max(goodMin) - np.min(goodMin))*u.min
-    if nkotf == None:
-        nkotf = nkotf_parameters(**kwargs)
-    TimeAr, ScanX, ScanY = nkotf_scan(XSize=nkotf.XSize,YSize=nkotf.YSize,PA=nkotf.PA,
-                                      Tilt=nkotf.Tilt, Step=nkotf.Step, Speed=nkotf.Speed,
-                                      fSamp=nkotf.fSamp)
-    time_per_scan   = (np.max(TimeAr) - np.min(TimeAr))*u.s
-    tpS_w_overhead  = (time_per_scan*1.1).to("min")
-
-    ### If I wanted to try to simulate exactly the overhead (pointings, focus)
-    ### I might want to take breaks every hour and every 2-3 hours.
-    ### But I will hold off on this.
-    ScansperHour    = int(((1.0*u.hour)/tpS_w_overhead).decompose().value)
-    ScansperDay     = int(((time_per_day)/tpS_w_overhead).decompose().value)
-    Coverage = None
-    NEFD1mm, eta1mm, Tau1mm = values_by_band(band="1mm",pwv=pwv)
-    NEFD2mm, eta2mm, Tau2mm = values_by_band(band="2mm",pwv=pwv)
-
-    for ScanNum in range(ScansperDay):
-        ### The starting Minute:
-        MinStart = np.min(goodMin) + (ScanNum*tpS_w_overhead).to("min").value
-        ### The starting time (date + hour,min,second):
-        tStart = create_mytime(mydate,MinStart)
-        tStart = goodStart + (ScanNum*tpS_w_overhead) # date object
-        if doPlot == True:
-            plot_radecs(RaDecs)
-        Coverage = coverage_map(tStart,nkotf,skyobj,TimeAr, ScanX, ScanY,
-                                Coverage=Coverage,pwv=pwv)
-        print "Scan "+str(ScanNum)+" of "+str(ScansperDay)
-
-    Coverage.weight1mm *= eta1mm/(NEFD1mm**2)
-    Coverage.weight2mm *= eta2mm/(NEFD2mm**2)
-    nzwt1mm = (Coverage.weight1mm > 0); nzwt2mm = (Coverage.weight2mm > 0)
-    Coverage.noise1mm[nzwt1mm] = Coverage.weight1mm[nzwt1mm]**(-0.5)
-    Coverage.noise2mm[nzwt2mm] = Coverage.weight2mm[nzwt2mm]**(-0.5)
-
-    return Coverage
-
-def make_fits(Coverage,target="Object"):
-
-    header = Coverage.w.to_header()
-
-    hdu1 = fits.PrimaryHDU(Coverage.time,header=header)
-    hdu1.header.append(("Title","Time Map"))
-    hdu1.header.append(("Target",target))
-    ### Weight Maps:
-    hdu2 = fits.ImageHDU(Coverage.weight1mm)
-    hdu2.header = header
-    hdu2.name = 'Weight_Map_1mm'
-    hdu2.header.append(("Title","Weight Map 1mm"))
-    hdu2.header.append(("Target",target))
-    hdu2.header.append(("XTENSION","Second"))
-    hdu2.header.append(("SIMPLE","T")) 
-    hdu2.verify('fix')
-    hdu3 = fits.ImageHDU(Coverage.weight2mm)
-    hdu3.header = header
-    hdu3.name = 'Weight_Map_2mm'
-    hdu3.header.append(("Title","Weight Map 1mm"))
-    hdu3.header.append(("Target",target))
-    hdu3.header.append(("XTENSION","Second"))
-    hdu3.header.append(("SIMPLE","T")) 
-    hdu3.verify('fix')
-    ### Noise Maps:
-    hdu4 = fits.ImageHDU(Coverage.noise1mm)
-    hdu4.header = header
-    hdu4.name = 'Noise_Map_1mm'
-    hdu4.header.append(("Title","Noise Map 1mm"))
-    hdu4.header.append(("Target",target))
-    hdu4.header.append(("XTENSION","Second"))
-    hdu4.header.append(("SIMPLE","T")) 
-    hdu4.verify('fix')
-    hdu5 = fits.ImageHDU(Coverage.noise2mm)
-    hdu5.header = header
-    hdu5.name = 'Noise_Map_2mm'
-    hdu5.header.append(("Title","Noise Map 1mm"))
-    hdu5.header.append(("Target",target))
-    hdu5.header.append(("XTENSION","Second"))
-    hdu5.header.append(("SIMPLE","T")) 
-    hdu5.verify('fix')
-
-    hdu1.header.add_history("Coverage maps made on "+Coverage.date_made+ ".")
-    hdu1.header.add_history("Coverage maps are for observations on "+Coverage.date_obs+ ".")
-    hdulist = fits.HDUList([hdu1,hdu2,hdu3,hdu4,hdu5])
-    hdulist.info()
-    filename="Coverage_Maps_"+target+".fits"
-    fullpath = os.path.join(cwd,filename)
-    hdulist.writeto(fullpath,overwrite=True,output_verify="exception")
-
+#####################################################################################
+### NIKA2-specific values:
+    
 def values_by_band(band="1mm",pwv=4):
 
     NEFD_1mm = 35.0      # mJy s**1/2
@@ -642,6 +612,9 @@ def opacity_by_band(band="1mm",pwv=4):
         tau = bv_2*pwv + cv_2
 
     return tau
+
+#################################################################################
+### Some calculations
 
 def find_radial_noise(Coverage,atR=None,inR=None,profile=False,band="1mm"):
 
@@ -689,42 +662,117 @@ def find_radial_noise(Coverage,atR=None,inR=None,profile=False,band="1mm"):
         
     
 #################################################################################
-
-
-
-
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
 #################################################################################
-
-
-
-
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
 #################################################################################
-
-
-
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
 #################################################################################
 #################################################################################
 ##########################                             ##########################
 #############                                                       #############
-#############                   PLOTTING ROUTINES                   #############
+#############                    OUTPUT ROUTINES:                   #############
+#############               MAPPING AND PLOTTING ROUTINES           #############
 #############                                                       #############
 ##########################                             ##########################
 #################################################################################
 #################################################################################
-
-
-
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#################################################################################
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
+#+ + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + +#
+# + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
+#################################################################################
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
+#  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -#
+#--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  -- #
 #################################################################################
 
+def make_fits(Coverage,target="Object",mydir=cwd):
 
+    header = Coverage.w.to_header()
 
+    hdu1 = fits.PrimaryHDU(Coverage.time,header=header)
+    hdu1.header.append(("Title","Time Map"))
+    hdu1.header.append(("Target",target))
+    
+    ### Weight Maps:
+    hdu2 = fits.ImageHDU(Coverage.weight1mm)
+    hdu2.header = header
+    hdu2.name = 'Weight_Map_1mm'
+    hdu2.header.append(("Title","Weight Map 1mm"));    hdu2.header.append(("Target",target))
+    hdu2.header.append(("XTENSION","Second"));         hdu2.header.append(("SIMPLE","T")) 
+    hdu2.verify('fix')
+    hdu3 = fits.ImageHDU(Coverage.weight2mm)
+    hdu3.header = header
+    hdu3.name = 'Weight_Map_2mm'
+    hdu3.header.append(("Title","Weight Map 1mm"));    hdu3.header.append(("Target",target))
+    hdu3.header.append(("XTENSION","Second"));         hdu3.header.append(("SIMPLE","T")) 
+    hdu3.verify('fix')
+    
+    ### Noise Maps:
+    hdu4 = fits.ImageHDU(Coverage.noise1mm)
+    hdu4.header = header
+    hdu4.name = 'Noise_Map_1mm'
+    hdu4.header.append(("Title","Noise Map 1mm"));    hdu4.header.append(("Target",target))
+    hdu4.header.append(("XTENSION","Second"));        hdu4.header.append(("SIMPLE","T")) 
+    hdu4.verify('fix')
+    hdu5 = fits.ImageHDU(Coverage.noise2mm)
+    hdu5.header = header
+    hdu5.name = 'Noise_Map_2mm'
+    hdu5.header.append(("Title","Noise Map 1mm"));    hdu5.header.append(("Target",target))
+    hdu5.header.append(("XTENSION","Second"));        hdu5.header.append(("SIMPLE","T")) 
+    hdu5.verify('fix')
 
-#################################################################################
+    hdu1.header.add_history("Coverage maps made on "+Coverage.date_made+ ".")
+    hdu1.header.add_history("Coverage maps are for observations on "+Coverage.date_obs+ ".")
+    hdulist = fits.HDUList([hdu1,hdu2,hdu3,hdu4,hdu5])
+    hdulist.info()
+    filename="Coverage_Maps_"+target+".fits"
+    fullpath = os.path.join(mydir,filename)
+    hdulist.writeto(fullpath,overwrite=True,output_verify="exception")
 
+def shelve_coverage(Coverage,filename='Shelved_Coverage.sav',mydir=cwd):
 
+    to_shelve=['Coverage']
+    my_shelf = shelve.open(filename,'n') # 'n' for new
+    for key in to_shelve:
+        if key in cannot_shelve:
+            print 'Skipping trying to shelve ',key
+        else:
+            try:
+                my_shelf[key] = globals()[key]
+            except TypeError:
+                # __builtins__, my_shelf, and imported modules can not be shelved.
+                print('ERROR shelving: {0}'.format(key))
+    my_shelf.close()
 
-
-#################################################################################
 
 def add_noise_text(Coverage,band="1mm",myfontsize=15,small=False,large=False):
    
@@ -760,8 +808,6 @@ def add_scan_text(Coverage,band="1mm",myfontsize=15):
     AllAvgTau2= np.mean(Coverage.scantau2mm)
     AllAvgEC1 = np.mean(np.exp(Coverage.scantau1mm/np.cos(Coverage.scanel.value*(u.deg.to('rad')))))
     AllAvgEC2 = np.mean(np.exp(Coverage.scantau2mm/np.cos(Coverage.scanel.value*(u.deg.to('rad')))))
-#    AllAvgEC1 = 1.1
-#    AllAvgEC2 = 1.1
     
     plt.text(220.0*nXpix/400,10.0*nYpix/400,r'$\langle $Elev$ \rangle = $'+
              "{:.2f}".format(AllAvgEl)+' deg.',fontsize=myfontsize)
@@ -782,7 +828,6 @@ def add_scan_text(Coverage,band="1mm",myfontsize=15):
     plt.text(230.0*nXpix/400,370.0*nYpix/400,
              r'$\langle $PWV$ \rangle = $'+"{:.2f}".format(AllAvgPWV)+' mm',fontsize=myfontsize)
 
-#def add_target_text(Coverage):
 
 def plot_skyCoord(myax,Coverage,skyobj,mycolor='purple',mylabel='Other'):
 
@@ -803,28 +848,25 @@ def plot_skyCoord(myax,Coverage,skyobj,mycolor='purple',mylabel='Other'):
     
     myax.plot([myxx],[myyy],'x',color='white',ms=5,mew=2)
     myax.plot([myxx],[myyy],'x',color=mycolor,ms=3,mew=1,label=mylabel)
-#    plt.text(myxx,myyy,'hello')
-#    print myxx,myyy
-#    import pdb; pdb.set_trace()
 
-def hist_pas(Coverage,dpi=200,filename="Position_Angle_Histogram_",
-             addname="Object",myfontsize=15,format='png'):
+def hist_pas(Coverage,dpi=200,filename="Parallactic_Angle_Histogram_",
+             addname="Object",myfontsize=15,format='png',mydir=cwd):
 
-    fig = plt.figure(dpi=200,figsize=(8,8))
+    fig = plt.figure(dpi=dpi,figsize=(8,8))
     ax = fig.add_axes([0.10, 0.3, 0.85, 0.65])
     ax1 = fig.add_axes([0.10, 0.10, 0.85, 0.10])
     # N is the count in each bin, bins is the lower-limit of the bin
     N, bins, patches = ax.hist(Coverage.scanPA,bins='auto')
     binsize = np.median(bins - np.roll(bins,1))
     binEl  = np.array([]);  paStart= np.array([]); paStop = np.array([])
-    
+
     for pa in bins:
         gi = (Coverage.scanPA >= pa) & (Coverage.scanPA < pa+binsize)
         myEls = Coverage.scanel[gi].value
-        binEl  = np.append(binEl,np.mean(myEls))
-        paStart = np.append(paStart,np.min(Coverage.scanstart[gi]).value)
-        paStop  = np.append(paStop,np.max(Coverage.scanstop[gi]).value)
-        #ncou   = len(myEls)
+        if any(gi):
+            binEl  = np.append(binEl,np.mean(myEls))
+            paStart = np.append(paStart,np.min(Coverage.scanstart[gi]))
+            paStop  = np.append(paStop,np.max(Coverage.scanstop[gi]))
         
     cmap=plt.cm.spectral
     mycolors=np.array([])
@@ -837,7 +879,7 @@ def hist_pas(Coverage,dpi=200,filename="Position_Angle_Histogram_",
     for pa,mystart in zip(bins,paStart):
         nmax = np.max(N)
         yy = (pa - np.min(bins))*nmax/(np.max(bins) - np.min(bins))
-        mytime =  datetime.datetime.strptime(mystart, '%Y-%m-%d %H:%M:%S.%f')
+        mytime =  mystart.datetime
         myutc  = mytime.strftime('%H:%M')+' UTC'
         ax.text(pa,yy/2.0+4,myutc,color='black',fontsize=myfontsize,rotation=-90)
 
@@ -845,31 +887,30 @@ def hist_pas(Coverage,dpi=200,filename="Position_Angle_Histogram_",
     startday= startdt.strftime('%Y-%m-%d')
     myxloc = np.min(bins)*0.6 + np.max(bins)*0.4
     
-    ax.text(myxloc,0.9*N, startday,color='black',fontsize=myfontsize)
+    ax.text(myxloc,0.9*np.max(N), startday,color='black',fontsize=myfontsize)
     
     units="degrees"
     cb1 = cb.ColorbarBase(ax1, cmap=cmap,norm=norm,
                           orientation='horizontal')
-    ax.set_title("Histogram of Position Angles on "+addname,fontsize=myfontsize)
-    ax.set_xlabel("Position Angle (degrees)",fontsize=myfontsize)
+    ax.set_title("Histogram of Parallactic Angles on "+addname,fontsize=myfontsize)
+    ax.set_xlabel("Parallactic Angle (degrees)",fontsize=myfontsize)
     ax.set_ylabel("Number of Scans",fontsize=myfontsize)
     ax1.set_xlabel("Average Elevation",fontsize=myfontsize)
-    fullbase = os.path.join(cwd,filename)
+    fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+addname+'.eps'; fullpng = fullbase+addname+'.png'
+
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
         plt.savefig(fulleps,format='eps')
     plt.clf()
 
-#    import pdb;pdb.set_trace()
-
 #############################################################################
     
 def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
                   myfontsize=15,mytitle="my map",addname="_quantity",
                   units='(units)',band="1mm",cblim=False,addtext=False,dpi=200,
-                  secObj=None,thiObj=None,fouObj=None,format='png'):
+                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd):
 
     if band == "1mm":
         nzwt = (Coverage.weight1mm > 0)
@@ -910,7 +951,7 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
     strnkotf = "@nkotf "+strxs+' '+strys+' '+strpa+' '+strti+' '+strst+' '+\
                strsp+' '+Coverage.nkotf.CoordSys
     plt.suptitle(strnkotf,x=0.48,y=0.87,fontsize=myfontsize,color='blue')
-    fullbase = os.path.join(cwd,filename)
+    fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+addname+'.eps'; fullpng = fullbase+addname+'.png'
     cbar = fig.colorbar(cax) ; cbar.set_label(units,fontsize=myfontsize)
     ra = ax.coords[0]; dec = ax.coords[1]
@@ -931,66 +972,60 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
     plt.clf()   
     
 def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
-                  secObj=None,thiObj=None,fouObj=None,format='png'):
+                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd):
 
     myfontsize=15
     ind_plots_cov(Coverage,Coverage.time,filename=filename,target=target,
                   mytitle="Time Map; ",addname="_time",units='seconds',
                   myfontsize=myfontsize,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format)
+                  fouObj=fouObj,format=format,mydir=mydir)
     
     ind_plots_cov(Coverage,Coverage.weight1mm,filename=filename,target=target,
                   mytitle="Weight Map, 1mm; ",addname="_weight1mm",units="mJy/beam $^{-2}$",
                   myfontsize=myfontsize,band="1mm",secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format)
+                  fouObj=fouObj,format=format,mydir=mydir)
 
     ind_plots_cov(Coverage,Coverage.weight2mm,filename=filename,target=target,
                   mytitle="Weight Map, 2mm; ",addname="_weight2mm",units="mJy/beam $^{-2}$",
                   myfontsize=myfontsize,band="2mm",secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format)
+                  fouObj=fouObj,format=format,mydir=mydir)
 
     ind_plots_cov(Coverage,Coverage.noise1mm,filename=filename,target=target,
                   mytitle="Noise Map, 1mm; ",addname="_noise1mm",units="mJy/beam",
                   myfontsize=myfontsize,band="1mm",cblim=True,addtext=True,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format)
+                  fouObj=fouObj,format=format,mydir=mydir)
 
     ind_plots_cov(Coverage,Coverage.noise2mm,filename=filename,target=target,
                   mytitle="Noise Map, 2mm; ",addname="_noise2mm",units="mJy/beam",
                   myfontsize=myfontsize,band="2mm",cblim=True,addtext=True,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format)
+                  fouObj=fouObj,format=format,mydir=mydir)
 
-def plot_visibility(mydate,mysky,Coverage=None,mylabel="Target",dpi=200,elMin=40,
-                    filename = "Visibility_Chart",utcoffset=2.0*u.hour,format='png'):
+def plot_visibility(mydate,skyobj,Coverage=None,elMin=40,mylabel="Target",
+                    dpi=200,filename = "Visibility_Chart",format='png',
+                    myloc=thirtym,mydir=cwd):
 
-    bestdate = find_transit(mysky,mydate,utcoffset=utcoffset)
-
-#    midnight = create_mytime(mydate,0,utcoffset=2.0*u.hour)
-    mid_date = datetime.datetime.strptime(bestdate.value[0], "%Y-%m-%d %H:%M:%S.%f")
-    npts = 1000
-    date_arr = np.array([mid_date + datetime.timedelta(hours=i*24.0/npts - 12.0) for i in xrange(npts)])
-    delta_bestdate = np.linspace(-12, 12, npts)*u.hour
-#    delta_bestdate = np.linspace(-12, 12, npts)*u.hour
-#    mytimes  = bestdate + delta_bestdate
-    mytimes  = bestdate + delta_bestdate
-    myframe  = apc.AltAz(obstime=mytimes, location=thirtym)
+    elStart, elStop, mytimes = find_times_above_el(skyobj,mydate,myloc,elMin=elMin)
+    
+    myframe  = apc.AltAz(obstime=mytimes, location=myloc)
     sunaltazs = apc.get_sun(mytimes).transform_to(myframe)
-    moonaltazs= apc.get_moon(mytimes).transform_to(myframe)
-    objaltazs = mysky.transform_to(myframe)
+    #moonaltazs= apc.get_moon(mytimes).transform_to(myframe)
+    objaltazs = skyobj.transform_to(myframe)
 
-    GoodEl = (objaltazs.alt.value > elMin)
-    elStart= np.min(date_arr[GoodEl])
-    elStop = np.max(date_arr[GoodEl])
+    #############################
 
-    deltaT = 24.0*u.hour / npts
-    bt30 = len(mytimes[(objaltazs.alt.value > 30.0)]) * deltaT.value
-    bt40 = len(mytimes[(objaltazs.alt.value > 40.0)]) * deltaT.value
-    bt50 = len(mytimes[(objaltazs.alt.value > 50.0)]) * deltaT.value
-    bteM = len(mytimes[(objaltazs.alt.value > elMin)]) * deltaT.value
+    bt30 = (np.max(mytimes[(objaltazs.alt.value > 30.0)]) - \
+           np.min(mytimes[(objaltazs.alt.value > 30.0)])).to("hour").value
+    bt40 = (np.max(mytimes[(objaltazs.alt.value > 40.0)]) - \
+           np.min(mytimes[(objaltazs.alt.value > 40.0)])).to("hour").value
+    bt50 = (np.max(mytimes[(objaltazs.alt.value > 50.0)]) - \
+           np.min(mytimes[(objaltazs.alt.value > 50.0)])).to("hour").value
+    bteM = (np.max(mytimes[(objaltazs.alt.value > elMin)]) - \
+           np.min(mytimes[(objaltazs.alt.value > elMin)])).to("hour").value
 
     plt.figure(1,dpi=dpi,figsize=(8,8));    plt.clf();    fig1,ax1 = plt.subplots()
 
-#    mydates = matplotlib.dates.date2num(mytimes)
-
+    date_arr = mytimes.datetime       # Convert to datetime array, for plotting
+    
     ax1.fill_between(date_arr, 0, 90,
                      sunaltazs.alt < -0*u.deg, color='0.5', zorder=0)
     ax1.fill_between(date_arr, 0, 90,
@@ -1002,13 +1037,13 @@ def plot_visibility(mydate,mysky,Coverage=None,mylabel="Target",dpi=200,elMin=40
     ax1.plot(myxlim,[30,30],'--',color ='0.75',label="{:.1f}".format(bt30)+" hrs")
     ax1.plot(myxlim,[40,40],'--',color ='0.5' ,label="{:.1f}".format(bt40)+" hrs")
     ax1.plot(myxlim,[50,50],'--',color ='0.25',label="{:.1f}".format(bt50)+" hrs")
-#    import pdb;pdb.set_trace()
-
+    myStart = elStart.datetime; myStop = elStop.datetime
+    
     myylim = ax1.get_ylim(); ax1.set_ylim(myylim)
     ax1.plot(myxlim,[elMin,elMin],'--',color ='b',
              label="{:.1f}".format(bteM)+" hrs above "+str(int(elMin)))
-    ax1.plot_date([elStart,elStart],[0,90],'--',color='b')
-    ax1.plot_date([elStop,elStop],[0,90],'--',color='b')
+    ax1.plot_date([myStart,myStart],[0,90],'--',color='b')
+    ax1.plot_date([myStop,myStop],[0,90],'--',color='b')
 
     
     gi = np.array([])
@@ -1017,7 +1052,6 @@ def plot_visibility(mydate,mysky,Coverage=None,mylabel="Target",dpi=200,elMin=40
             mgi = np.where(((mytimes > start) & (mytimes < stop)) == True)
             gi = np.append(gi,mgi)
 
-#        import pdb; pdb.set_trace()
         gi = int_arr(gi)
         ax1.plot_date(date_arr[gi], objaltazs.alt.value[gi],color='orange',ms=2,
                       label="Obs. ("+"{:.1f}".format(Coverage.tint.to('hour').value)+' hrs)')
@@ -1030,14 +1064,14 @@ def plot_visibility(mydate,mysky,Coverage=None,mylabel="Target",dpi=200,elMin=40
     plt.xlabel('UTC (MM-DD HH)')
     plt.ylabel('Altitude [deg]')  
     plt.gcf().autofmt_xdate()  # Hopefully make the x-axis (dates) look better
-    fullbase = os.path.join(cwd,filename)
+    fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
         plt.savefig(fulleps,format='eps')
 
-def plot_radecs(RaDecs,span=600,format='png'):
+def plot_radecs(RaDecs,span=600,format='png',mydir=cwd):
     """
     This module plots the right asciension and declination of a (raster) scan
     ----
@@ -1089,18 +1123,18 @@ def plot_radecs(RaDecs,span=600,format='png'):
 #    plt.yticks(ticksLocationsDEC,ticksLabelsDEC)
 #    plt.xticks(ticksLocationsRA ,ticksLabelsRA)
     
-    filename = "RaDec_map_v2";fullbase = os.path.join(cwd,filename)
+    filename = "RaDec_map_v2";fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
         plt.savefig(fulleps,format='eps')
 
-def plot_altaz(ScanAz,ScanEl,TestRaDec,format='png'):
+def plot_altaz(ScanAz,ScanEl,TestRaDec,format='png',mydir=cwd):
 
     plt.figure()
     plt.plot(ScanAz.value,ScanEl.value,'.')
-    filename = "AltAz_map_v2";fullbase = os.path.join(cwd,filename)
+    filename = "AltAz_map_v2";fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
     if format == 'png':
         plt.savefig(fullpng,format='png')
@@ -1109,9 +1143,12 @@ def plot_altaz(ScanAz,ScanEl,TestRaDec,format='png'):
         
     plt.figure()
     plt.plot(TestRaDec.ra.value,TestRaDec.dec.value,'.')
-    filename = "TestRaDec_map_v2";fullbase = os.path.join(cwd,filename)
+    filename = "TestRaDec_map_v2";fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+'.eps'; fullpng = fullbase+'.png'
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
         plt.savefig(fulleps,format='eps')
+
+
+
