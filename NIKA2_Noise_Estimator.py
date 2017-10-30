@@ -10,6 +10,7 @@ import matplotlib.dates
 from matplotlib import colors
 from matplotlib import colorbar as cb
 import pytz, datetime, os
+import shelve
 
 ################################################################################
 
@@ -184,8 +185,8 @@ def nkotf_scan(XSize=8,YSize=5,PA=0,Tilt=0,Step=20.0,Speed=40.0,
         ssTimeAr = np.arange(nSSS)/fSamp + tTune + (tTurn+tSS)*sScan
         ssScanX  = np.arange(nSSS)*XSize/float(nSSS)*np.cos(Tilt*u.deg).value -\
                    XSize/2.0 
-        ssScanY  = np.zeros(nSSS)*YSize/nSSS*np.sin(Tilt*u.deg).value +\
-                   sScan*mySign/YSpA - YSize*mySign/2
+        ssScanY  = np.zeros(nSSS)*YSize/float(nSSS)*np.sin(Tilt*u.deg).value +\
+                   sScan*mySign/YSpA - YSize*mySign/2.0
 
         if sScan % 2 == 1:
             ssScanX = np.flipud(ssScanX)
@@ -388,7 +389,7 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
         YYarr  = (np.arange(nYpix)-nYpix/2.0)*PixS
         XXmap  = np.outer(XXarr, np.zeros(nYpix)+1.0)*u.arcsec
         YYmap  = np.outer(np.zeros(nXpix)+1.0, YYarr)*u.arcsec
-        RAmap  = XXmap + avgRA; DECmap = YYmap + avgDEC
+        RAmap  = XXmap/np.cos(avgDEC) + avgRA; DECmap = YYmap + avgDEC
         
         #        RAmap  = np.outer(XXarr + AvgRA, np.zeros(nYpix)+1.0)
         #        DECmap = np.outer(np.zeros(nYpix)+1.0,YYarr + AvgDEC)
@@ -432,16 +433,22 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
     Coverage.scanstart = np.append(Coverage.scanstart,scanstart)
     Coverage.scanstop = np.append(Coverage.scanstop,scanstop)
     Coverage.scanPA = np.append(Coverage.scanPA,myPA)
+#    RAcheck   = (Coverage.RAcen - RaDecs.ra).to("arcmin") *np.cos(RaDecs.dec)
+#    DECcheck  = (RaDecs.dec-Coverage.DECcen).to("arcmin")
+#    Distcheck = (RAcheck**2 + DECcheck**2)**0.5
+#    NgtFoV = len(np.where(Distcheck > 3.25*u.arcmin))
+#    print NgtFoV
+#    import pdb;pdb.set_trace()
 
-    for i in range(len(RaDecs.ra)):
-        RAhitmap  = (Coverage.ra0 - RaDecs.ra[i]).to("arcsec") + Coverage.myFOVx
-        DEChitmap = (RaDecs.dec[i]-Coverage.dec0).to("arcsec") + Coverage.myFOVy
+    for ra,dec,EC1,EC2 in zip(RaDecs.ra,RaDecs.dec,ExtCorr1mm.value,ExtCorr2mm.value):
+        RAhitmap  = (Coverage.ra0 - ra).to("arcsec")*np.cos(dec) + Coverage.myFOVx
+        DEChitmap = (dec-Coverage.dec0).to("arcsec") + Coverage.myFOVy
 
         hitmap = [int_arr((RAhitmap/Coverage.pixs).value),
                   int_arr((DEChitmap/Coverage.pixs).value)]
         Coverage.time[hitmap] += 1.0/fSamp
-        Coverage.weight1mm[hitmap] += 1.0/(fSamp*(ExtCorr1mm.value[i])**2)
-        Coverage.weight2mm[hitmap] += 1.0/(fSamp*(ExtCorr2mm.value[i])**2)
+        Coverage.weight1mm[hitmap] += 1.0/(fSamp*(EC1)**2)
+        Coverage.weight2mm[hitmap] += 1.0/(fSamp*(EC2)**2)
                     
         Coverage.tint += (1.0/fSamp)*u.s
 
@@ -550,6 +557,8 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
             tStart  += WallTime
             Nscans  += 1
             ObsValid = (tStart < elStop) & (Coverage.tint < tInt)
+            StrInt = "{:.2f}".format(Coverage.tint.to("min").value)+" minutes"
+            StrMaxTime = "{:.2f}".format(np.max(Coverage.time)/60.0)+" minutes"
 
             
             if ObsValid:
@@ -557,10 +566,9 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
                 tRemainingInt = (tInt - Coverage.tint).to("min").value
                 tRemaining = np.min([tRemainingEl,tRemainingInt])
                 StrRem ="{:.2f}".format(tRemaining) + ' minutes'
-                StrInt = "{:.2f}".format(Coverage.tint.to("min").value)+" minutes"
                 print 'Completed ',Nscans,' scan so far (tInt = '+StrInt+'); '+StrRem+' remaining'
+                print 'As a check, the maximum time in the map is: ',StrMaxTime,' minutes'
             else:
-                StrInt = "{:.2f}".format(Coverage.tint.to("min").value)+" minutes"
                 print 'Completed ',Nscans,' scan so far (tInt = '+StrInt+'); this is the last scan.'
                 break 
 
@@ -639,7 +647,7 @@ def find_radial_noise(Coverage,atR=None,inR=None,profile=False,band="1mm"):
 
 #        inRind  = (radsorted < atR)
 #        myind   = np.where(radsorted == np.max(radsorted[inRind]))
-        inRind  = ((radsorted > atR-Rbuffer) & (radsorted < atR))
+        inRind  = ((radsorted > atR-Rbuffer) & (radsorted < atR+Rbuffer))
         myind   = np.where(radsorted == np.max(radsorted[inRind]))
         if hasattr(myind, "__len__"):
             myind=myind[0][0]
@@ -764,14 +772,11 @@ def shelve_coverage(Coverage,filename='Shelved_Coverage.sav',mydir=cwd):
     to_shelve=['Coverage']
     my_shelf = shelve.open(filename,'n') # 'n' for new
     for key in to_shelve:
-        if key in cannot_shelve:
-            print 'Skipping trying to shelve ',key
-        else:
-            try:
-                my_shelf[key] = globals()[key]
-            except TypeError:
-                # __builtins__, my_shelf, and imported modules can not be shelved.
-                print('ERROR shelving: {0}'.format(key))
+        try:
+            my_shelf[key] = globals()[key]
+        except TypeError:
+            # __builtins__, my_shelf, and imported modules can not be shelved.
+            print('ERROR shelving: {0}'.format(key))
     my_shelf.close()
 
 
@@ -1048,7 +1053,7 @@ def plot_visibility(mydate,skyobj,Coverage=0,elMin=40,mylabel="Target",
 
     
     gi = np.array([])
-    if isinstance(Coverage,NNE.CovMap):
+    if isinstance(Coverage,CovMap):
         for start,stop in zip(Coverage.scanstart,Coverage.scanstop):
             mgi = np.where(((mytimes > start) & (mytimes < stop)) == True)
             gi = np.append(gi,mgi)
