@@ -14,11 +14,18 @@ target='MyObjectName'
 
 #########################################################################
 ### Define how you are observing your object:
-tInt  = 10*u.min    # How much integration time do you want?
+tInt  = 20*u.min    # How much integration time do you want?
 elMin = 40          # Minimum elevation (degrees)
-nkotf = NNE.nkotf_parameters(XSize=8.0,YSize=5.0,PA=0,Tilt=0,Step=20.0,
+nkotf1 = NNE.nkotf_parameters(XSize=6.0,YSize=2.1,PA=20,Tilt=0,Step=5.0,
                              Speed=40.0,CoordSys='azel',fSamp=20.0)
-scanStrat = [nkotf] # Make a list of your scan strategy(ies).
+nkotf2 = NNE.nkotf_parameters(XSize=6.0,YSize=2.1,PA=-20,Tilt=0,Step=5.0,
+                             Speed=40.0,CoordSys='azel',fSamp=20.0)
+nkotf3 = NNE.nkotf_parameters(XSize=6.0,YSize=2.1,PA=40,Tilt=0,Step=5.0,
+                             Speed=40.0,CoordSys='azel',fSamp=20.0)
+nkotf4 = NNE.nkotf_parameters(XSize=6.0,YSize=2.1,PA=-40,Tilt=0,Step=5.0,
+                             Speed=40.0,CoordSys='azel',fSamp=20.0)
+scanStrat = [nkotf1,nkotf2,nkotf3,nkotf4]
+# Make a list of your scan strategy(ies).
 
 #########################################################################
 ### Define the conditions (as governed by precipitable water vapor):

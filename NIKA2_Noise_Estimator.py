@@ -371,7 +371,7 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
 
     scanlen = ((nkotf.XSize/2.0)**2 + (nkotf.YSize/2.0)**2)**0.5
     scanext = scanlen + FoV/1.5
-    mybuffer= 1.6
+    mybuffer= 1.3
 
     if span == None:
         span = (scanext*mybuffer*u.arcmin).to('arcsec')
@@ -530,7 +530,8 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
                             "Please change elMin to a lower elevation.")
        
     if nkotf == None:
-        nkotf = nkotf_parameters(**kwargs)
+        mynkotf  = nkotf_parameters(**kwargs)
+        nkotf= [mynkotf]
 
     ObsValid = True     #
     Coverage = None     #
@@ -583,6 +584,7 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
     nzwt1mm = (Coverage.weight1mm > 0); nzwt2mm = (Coverage.weight2mm > 0)
     Coverage.noise1mm[nzwt1mm] = Coverage.weight1mm[nzwt1mm]**(-0.5)
     Coverage.noise2mm[nzwt2mm] = Coverage.weight2mm[nzwt2mm]**(-0.5)
+    Coverage.nkotf = nkotf      # I want this to be an array of scan patterns
 
     return Coverage
 
@@ -916,7 +918,8 @@ def hist_pas(Coverage,dpi=200,filename="Parallactic_Angle_Histogram_",
 def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
                   myfontsize=15,mytitle="my map",addname="_quantity",
                   units='(units)',band="1mm",cblim=False,addtext=False,dpi=200,
-                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd):
+                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd,
+                  istimemap=False):
 
     if band == "1mm":
         nzwt = (Coverage.weight1mm > 0)
@@ -931,10 +934,9 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
 
     small = False
     large = False
-    if (Coverage.nkotf.XSize < 8) and (Coverage.nkotf.YSize < 8):
-        small = True
-        
-    fig = plt.figure(dpi=dpi,figsize=(8,8)); axpos=[0.2, 0.2, 0.7, 0.7]
+
+    yaxoff = len(Coverage.nkotf)*0.025  # Hopefully allows for ~4 nkotf's
+    fig = plt.figure(dpi=dpi,figsize=(8,8)); axpos=[0.2, 0.20-yaxoff, 0.7, 0.7]
     ax = WCSAxes(fig, axpos, wcs=Coverage.w);fig.add_axes(ax)
 #    cax = ax.imshow(map,interpolation='none',
 #                    norm=colors.LogNorm(vmin=mymin,vmax=mymax),cmap='bwr')
@@ -944,19 +946,33 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
     else:
         cax = ax.imshow(map,interpolation='none',origin='lower',
                         norm=colors.LogNorm(vmin=mymin,vmax=mymax),cmap='bwr')
-    plt.title(mytitle+target,fontsize=myfontsize*1.2,y=1.08)
-    strxs = "{:.1f}".format(float(Coverage.nkotf.XSize))
-    strys = "{:.1f}".format(float(Coverage.nkotf.YSize))
-    strpa = "{:.1f}".format(float(Coverage.nkotf.PA))
-    strti ="{:.1f}".format(float(Coverage.nkotf.Tilt))
-    strst = "{:.1f}".format(float(Coverage.nkotf.Step))
-    strsp="{:.1f}".format(float(Coverage.nkotf.Speed))
-    strofparams = "XSize = "+strxs+", "+"YSize = "+strys+", "+\
-                  "PA ="+strpa+", "+"Tilt ="+strti+", "+\
-                "Step ="+strst+", "+"Speed ="+strsp+", "
-    strnkotf = "@nkotf "+strxs+' '+strys+' '+strpa+' '+strti+' '+strst+' '+\
-               strsp+' '+Coverage.nkotf.CoordSys
-    plt.suptitle(strnkotf,x=0.48,y=0.87,fontsize=myfontsize,color='blue')
+    plt.title(mytitle+target,fontsize=myfontsize*1.2,y=1.05+2*yaxoff)
+
+    iats = np.array([])     # If All True -> Small
+    bany = np.array([])     # If Any True -> Large
+    nXpix,nYpix = map.shape
+
+    nOTF = 0; totOTF = len(Coverage.nkotf)
+    for tOTF in reversed(Coverage.nkotf):
+        if (tOTF.XSize < 8) and (tOTF.YSize < 8):
+            small = True
+            
+        strxs = "{:.1f}".format(float(tOTF.XSize))
+        strys = "{:.1f}".format(float(tOTF.YSize))
+        strpa = "{:.1f}".format(float(tOTF.PA))
+        strti ="{:.1f}".format(float(tOTF.Tilt))
+        strst = "{:.1f}".format(float(tOTF.Step))
+        strsp="{:.1f}".format(float(tOTF.Speed))
+        strofparams = "XSize = "+strxs+", "+"YSize = "+strys+", "+\
+                      "PA ="+strpa+", "+"Tilt ="+strti+", "+\
+                            "Step ="+strst+", "+"Speed ="+strsp+", "
+        strnkotf = str(totOTF-nOTF)+": @nkotf "+strxs+' '+strys+' '+strpa+' '+\
+                   strti+' '+strst+' '+strsp+' '+tOTF.CoordSys
+        #plt.suptitle(strnkotf,x=0.48,y=0.87,fontsize=myfontsize,color='blue')
+        ypos = (1.02 + 0.05*nOTF)*nYpix 
+        plt.text(nXpix/40.0,ypos,strnkotf,fontsize=myfontsize,color='blue')
+        nOTF+=1
+            
     fullbase = os.path.join(mydir,filename)
     fulleps = fullbase+addname+'.eps'; fullpng = fullbase+addname+'.png'
     cbar = fig.colorbar(cax) ; cbar.set_label(units,fontsize=myfontsize)
@@ -971,6 +987,14 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
     if secObj != None:
         plot_skyCoord(ax,Coverage,secObj,mylabel='G1200.1')
         
+    if istimemap == True:
+        zi = (map == 0)
+        map[zi] = np.max(map)/2.0
+        plt.text(10.0*nXpix/400,370.0*nYpix/400,'This map shows the time for which a',
+                 fontsize=myfontsize)
+        plt.text(10.0*nXpix/400,340.0*nYpix/400,'pixel is covered by the FOV',
+                 fontsize=myfontsize)
+        
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
@@ -982,10 +1006,10 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
 
     myfontsize=15
     ind_plots_cov(Coverage,Coverage.time,filename=filename,target=target,
-                  mytitle="Time Map; ",addname="_time",units='seconds',
+                  mytitle="Geometric Time Map; ",addname="_geo_time",units='seconds',
                   myfontsize=myfontsize,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir)
-    
+                  fouObj=fouObj,format=format,mydir=mydir,istimemap=True)
+        
     ind_plots_cov(Coverage,Coverage.weight1mm,filename=filename,target=target,
                   mytitle="Weight Map, 1mm; ",addname="_weight1mm",units="mJy/beam $^{-2}$",
                   myfontsize=myfontsize,band="1mm",secObj=secObj,thiObj=thiObj,
