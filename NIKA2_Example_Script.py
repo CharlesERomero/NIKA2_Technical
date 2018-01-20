@@ -8,7 +8,7 @@ import os
 #########################################################################
 ### Define the coordinates and name of your object:
 obj_ra = apc.Angle('12h00m00s')
-obj_dec= apc.Angle('+30d00m00s')
+obj_dec= apc.Angle('+80d00m00s')
 skyobj = apc.SkyCoord(obj_ra, obj_dec, equinox = 'J2000')
 target='MyObjectName'
 
@@ -77,8 +77,9 @@ NNE.plot_visibility(Coverage.date_obs,skyobj,Coverage,elMin=elMin,
                     mylabel=target,filename = target+"_Visibility_above"+elStr,
                     mydir=mydir)
 
-### This makes one plot- a histogram of parallactic angles:
+### This makes one plot- a histogram of parallactic/position angles:
 NNE.hist_pas(Coverage,addname=target,mydir=mydir)
+NNE.hist_pas(Coverage,addname=target,mydir=mydir,isposang=True)
 
 ### This writes a fits file with the 5 maps plotted in the plot_coverage
 NNE.make_fits(Coverage,target=target+"_full_night",mydir=mydir)

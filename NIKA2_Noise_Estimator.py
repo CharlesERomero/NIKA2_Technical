@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates
 from matplotlib import colors
 from matplotlib import colorbar as cb
-import pytz, datetime, os
+import pytz, datetime, os, pdb
+import FITS_tools.hcongrid as fth
 import shelve
 
 ################################################################################
@@ -85,6 +86,7 @@ def get_parallactic_angle(ha, dec, lat=tmlat):
     #               np.sin(lat)*np.cos(el) - np.cos(lat)*np.sin(el)*np.cos(az))
     pa = np.arctan(np.sin(ha)/(np.cos(dec)*np.tan(lat)-np.sin(dec)*np.cos(ha)))
 
+    # cos(z) = np.sin(tmlat)*np.sin(dec) + np.cos(tmlat)*np.cos(dec)*np.cos(ha)
     ### If we needed something beyond +/- pi/2:
     #pa = np.arctan2(np.sin(ha),np.cos(dec)*np.tan(lat)-np.sin(dec)*np.cos(ha))
 
@@ -220,7 +222,8 @@ def altaz_SCAN_radec(TimeAr,ScanX,ScanY,tStart,nkotf,location=thirtym,
         ScanAz   = (ScanX/60.0)*u.deg/np.cos(AltObj) + AzObj
         ScanEl   = (ScanY/60.0)*u.deg + AltObj
         ScanAltAz = apc.AltAz(ScanAz,ScanEl,obstime=ScanTime,location=location)
-        RaDecs = ScanAltAz.transform_to(apc.ICRS)
+        #RaDecs = ScanAltAz.transform_to(apc.ICRS)
+        RaDecs = ScanAltAz.transform_to(apc.FK5)
 
     else:
 
@@ -260,6 +263,8 @@ def create_wcs(PixS,avgRA,avgDEC,Xcen,Ycen):
     w.wcs.cdelt = np.array([RAdelt.value,DECdelt.value])
     w.wcs.crval = [avgRA.value,avgDEC.value] #[Xcen,Ycen]
     w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.radesys = "FK5"
+    #w.wcs.equinox = 2000.
     
     return w
 
@@ -297,6 +302,7 @@ class CovMap:
         self.scantau2mm = np.array([])
         self.scanstart  = np.array([])
         self.scanstop   = np.array([])
+        self.scanSA = np.array([])
         self.scanPA = np.array([])
 
         ### Some housekeeping info:
@@ -349,26 +355,48 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
 
     delRa  = (RaDecs.ra - np.roll(RaDecs.ra,1)).to('arcsec').value
     delDec = (RaDecs.dec- np.roll(RaDecs.dec,1)).to('arcsec').value
-    negdRa = np.median(delRa[(delRa < 0)])
-    posdRa = np.median(delRa[(delRa > 0)])
-    negdDec= np.median(delDec[(delRa < 0)])
-    posdDec= np.median(delDec[(delRa > 0)])
-    scPA   = np.arctan2(negdRa,negdDec)*(u.rad).to("deg")
-    scPA2  = np.arctan2(posdRa,posdDec)*(u.rad).to("deg")
+    avgRA ,avgDEC  = np.mean(RaDecs.ra),np.mean(RaDecs.dec)
+    negdRa = np.median(delRa[(delRa < 0)])*np.cos(avgDEC) #*u.s/u.s #
+    posdRa = np.median(delRa[(delRa > 0)])*np.cos(avgDEC)
+    negdDec= np.median(delDec[(delRa < 0)])*u.s/u.s
+    posdDec= np.median(delDec[(delRa > 0)])*u.s/u.s
+    
+    delAz  = (Azimuth - np.roll(Azimuth,1)).to('arcsec').value
+    delEl  = (Elevation- np.roll(Elevation,1)).to('arcsec').value
+    negdAz = np.median(delAz[(delRa < 0)])*np.cos(avgEL) #*u.s/u.s #
+    posdAz = np.median(delAz[(delRa > 0)])*np.cos(avgEL)
+    negdEl = np.median(delEl[(delRa < 0)])*u.s/u.s
+    posdEl = np.median(delEl[(delRa > 0)])*u.s/u.s
+    
+    scPA   = np.arctan2(negdRa,negdDec).to("deg").value
+    scPA2  = np.arctan2(posdRa,posdDec).to("deg").value
+    scPA_AA= np.arctan2(negdAz,negdEl).to("deg").value
+    scPA2AA= np.arctan2(posdAz,posdEl).to("deg").value
+
+    #print 'Ra-Dec Angles: ',scPA, scPA2
+    #print 'Alt-Az Angles: ',scPA_AA,scPA2AA
 
     if (scPA > 0) and (scPA < 180):
-        myPA = 90.0 - scPA  
+        mySA = 90.0 - scPA  
     else:
-        myPA = 90.0 -scPA2 
+        mySA = 90.0 -scPA2 
 
     ### Checking my parallactic angle calculations...
-    #tMid    = tStart + np.median(TimeAr)*u.s
-    #mylon   = myloc.to_geodetic()[0]
-    #mylst   = tMid.sidereal_time('apparent',longitude=mylon)
-    #ha      = (obj.ra - mylst).to("hourangle")
-    #ParAng = get_parallactic_angle(ha,obj.dec)
-    #print myPA, ParAng.to("deg")
-
+    tMid    = tStart + np.median(TimeAr)*u.s
+    mylon   = myloc.to_geodetic()[0]
+    mylst   = tMid.sidereal_time('apparent',longitude=mylon)
+    ha      = (obj.ra - mylst).to("hourangle")
+    #ha      = avgAZ
+    myPA = get_parallactic_angle(ha,obj.dec)
+    myPA = myPA.to("deg")
+    #print mySA, myPA
+    #pdb.set_trace()
+    
+    ### Things seem to be consistent. I forgot that I was checking on a scan for which
+    ### I defined a Scan Angle offset...thus a difference in the two values which I
+    ### thought represented "parallactic angle". I think that I do want to plot the
+    ### actual parallactic angles. Maybe.
+    
     scanlen = ((nkotf.XSize/2.0)**2 + (nkotf.YSize/2.0)**2)**0.5
     scanext = scanlen + FoV/1.5
     mybuffer= 1.3
@@ -432,13 +460,13 @@ def coverage_map(tStart,nkotf,obj,TimeAr, ScanX, ScanY,
     Coverage.scantau2mm = np.append(Coverage.scantau2mm,Tau2mm)
     Coverage.scanstart = np.append(Coverage.scanstart,scanstart)
     Coverage.scanstop = np.append(Coverage.scanstop,scanstop)
+    Coverage.scanSA = np.append(Coverage.scanSA,mySA)
     Coverage.scanPA = np.append(Coverage.scanPA,myPA)
 #    RAcheck   = (Coverage.RAcen - RaDecs.ra).to("arcmin") *np.cos(RaDecs.dec)
 #    DECcheck  = (RaDecs.dec-Coverage.DECcen).to("arcmin")
 #    Distcheck = (RAcheck**2 + DECcheck**2)**0.5
 #    NgtFoV = len(np.where(Distcheck > 3.25*u.arcmin))
 #    print NgtFoV
-#    import pdb;pdb.set_trace()
 
     for ra,dec,EC1,EC2 in zip(RaDecs.ra,RaDecs.dec,ExtCorr1mm.value,ExtCorr2mm.value):
         RAhitmap  = (Coverage.ra0 - ra).to("arcsec")*np.cos(dec) + Coverage.myFOVx
@@ -493,7 +521,7 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
                       **NOTE** This can also be an array or list of such objects
     date:             A datetime object, in UTC. If none, today is assumed
     precStart:        Set to True if you want your observations to start EXACTLY at the
-                      datetime you specify (again, UTC), or if unspecified, then moment that
+                      datetime you specify (again, UTC), or if unspecified, the moment that
                       you call this module. Otherwise, scans will start when
                       the object rises above elMin.
     elMin:            Minimum elevation (in degrees, but in Python, just given as a value)
@@ -575,7 +603,7 @@ def Observe_Object(skyobj, nkotf=None, date=None, precStart=False, elMin=40.0,
 
             if doPlot == True:
                 plot_radecs(RaDecs)
-                import pdb; pdb.set_trace()
+                pdb.set_trace()
 
         Nloop+=1
 
@@ -858,18 +886,25 @@ def plot_skyCoord(myax,Coverage,skyobj,mycolor='purple',mylabel='Other'):
     myax.plot([myxx],[myyy],'x',color=mycolor,ms=3,mew=1,label=mylabel)
 
 def hist_pas(Coverage,dpi=200,filename="Parallactic_Angle_Histogram_",
-             addname="Object",myfontsize=15,format='png',mydir=cwd):
+             addname="Object",isposang=False,myfontsize=15,format='png',mydir=cwd):
 
     fig = plt.figure(dpi=dpi,figsize=(8,8))
     ax = fig.add_axes([0.10, 0.3, 0.85, 0.65])
     ax1 = fig.add_axes([0.10, 0.10, 0.85, 0.10])
     # N is the count in each bin, bins is the lower-limit of the bin
-    N, bins, patches = ax.hist(Coverage.scanPA,bins='auto')
+    if isposang == True:
+        filename="Position_Angle_Histogram_"
+        N, bins, patches = ax.hist(Coverage.scanSA,bins='auto')
+        myangle = Coverage.scanSA
+    else:
+        N, bins, patches = ax.hist(Coverage.scanPA,bins='auto')
+        myangle = Coverage.scanPA        
+    #NSA, bins, patches2 = ax.hist(Coverage.scanSA,bins=bins)
     binsize = np.median(bins - np.roll(bins,1))
     binEl  = np.array([]);  paStart= np.array([]); paStop = np.array([])
 
     for pa in bins:
-        gi = (Coverage.scanPA >= pa) & (Coverage.scanPA < pa+binsize)
+        gi = (myangle >= pa) & (myangle < pa+binsize)
         myEls = Coverage.scanel[gi].value
         if any(gi):
             binEl  = np.append(binEl,np.mean(myEls))
@@ -919,7 +954,7 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
                   myfontsize=15,mytitle="my map",addname="_quantity",
                   units='(units)',band="1mm",cblim=False,addtext=False,dpi=200,
                   secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd,
-                  istimemap=False):
+                  istimemap=False,indata=[],inCont=[]):
 
     if band == "1mm":
         nzwt = (Coverage.weight1mm > 0)
@@ -960,9 +995,9 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
         strxs = "{:.1f}".format(float(tOTF.XSize))
         strys = "{:.1f}".format(float(tOTF.YSize))
         strpa = "{:.1f}".format(float(tOTF.PA))
-        strti ="{:.1f}".format(float(tOTF.Tilt))
+        strti = "{:.1f}".format(float(tOTF.Tilt))
         strst = "{:.1f}".format(float(tOTF.Step))
-        strsp="{:.1f}".format(float(tOTF.Speed))
+        strsp = "{:.1f}".format(float(tOTF.Speed))
         strofparams = "XSize = "+strxs+", "+"YSize = "+strys+", "+\
                       "PA ="+strpa+", "+"Tilt ="+strti+", "+\
                             "Step ="+strst+", "+"Speed ="+strsp+", "
@@ -994,41 +1029,73 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
                  fontsize=myfontsize)
         plt.text(10.0*nXpix/400,340.0*nYpix/400,'pixel is covered by the FOV',
                  fontsize=myfontsize)
-        
+
+    #pdb.set_trace()
+    if len(indata) > 1:
+        incolors=tuple('black' for _ in range(len(inCont)))
+        plt.contour(indata, inCont,colors=incolors,linewidths=2)        
+
     if format == 'png':
         plt.savefig(fullpng,format='png')
     else:
         plt.savefig(fulleps,format='eps')
     plt.clf()   
+
+ 
     
 def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
-                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd):
+                  secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd,
+                  infits=None,inContours=np.array([0.99,0.999])):
+
+    indata = None
+    if infits != None:
+        hdulist = fits.open(infits)
+        header = Coverage.w.to_header()
+        wgm = wcs.WCS(hdulist[0].header)
+        wgm.naxes = 2
+        hgm = wgm.to_header()
+        hgm['wcsaxes']=2
+        hgm.remove('crpix3'); hgm.remove('crpix4'); hgm.remove('cdelt3'); hgm.remove('cdelt4')
+        hgm.remove('ctype3'); hgm.remove('ctype4'); hgm.remove('crval3'); hgm.remove('crval4')
+        hgm.remove('cunit4')
+        #hgm.update(('WCSAXES',2,'Number of coordinate axes'))
+        inmap = hdulist[0].data; goodmap=inmap.squeeze(); values=goodmap.flatten()
+        sordid = np.sort(values); mylen=len(sordid); ContLvls=[]
+        ContLvls = [ sordid[int(mylen*c)] for c in inContours ]
+        hgm.append(('NAXIS1',goodmap.shape[0],'Number of pixels along dimension1'))
+        hgm.append(('NAXIS2',goodmap.shape[1],'Number of pixels along dimension2'))
+        header.append(('NAXIS1',Coverage.weight1mm.shape[0],'Number of pixels along dimension1'))
+        header.append(('NAXIS2',Coverage.weight1mm.shape[1],'Number of pixels along dimension2'))
+        indata = fth.hcongrid(goodmap, hgm, header, preserve_bad_pixels=False)      
+        #pdb.set_trace()
 
     myfontsize=15
     ind_plots_cov(Coverage,Coverage.time,filename=filename,target=target,
                   mytitle="Geometric Time Map; ",addname="_geo_time",units='seconds',
-                  myfontsize=myfontsize,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir,istimemap=True)
+                  myfontsize=myfontsize,secObj=secObj,thiObj=thiObj,fouObj=fouObj,
+                  format=format,mydir=mydir,istimemap=True,indata=indata,inCont=ContLvls)
         
     ind_plots_cov(Coverage,Coverage.weight1mm,filename=filename,target=target,
                   mytitle="Weight Map, 1mm; ",addname="_weight1mm",units="mJy/beam $^{-2}$",
                   myfontsize=myfontsize,band="1mm",secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir)
+                  fouObj=fouObj,format=format,mydir=mydir,indata=indata,inCont=ContLvls)
 
     ind_plots_cov(Coverage,Coverage.weight2mm,filename=filename,target=target,
                   mytitle="Weight Map, 2mm; ",addname="_weight2mm",units="mJy/beam $^{-2}$",
                   myfontsize=myfontsize,band="2mm",secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir)
+                  fouObj=fouObj,format=format,mydir=mydir,indata=indata,inCont=ContLvls)
 
     ind_plots_cov(Coverage,Coverage.noise1mm,filename=filename,target=target,
                   mytitle="Noise Map, 1mm; ",addname="_noise1mm",units="mJy/beam",
-                  myfontsize=myfontsize,band="1mm",cblim=True,addtext=True,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir)
+                  myfontsize=myfontsize,band="1mm",cblim=True,addtext=True,secObj=secObj,
+                  thiObj=thiObj,fouObj=fouObj,format=format,mydir=mydir,indata=indata,
+                  inCont=ContLvls)
 
     ind_plots_cov(Coverage,Coverage.noise2mm,filename=filename,target=target,
                   mytitle="Noise Map, 2mm; ",addname="_noise2mm",units="mJy/beam",
-                  myfontsize=myfontsize,band="2mm",cblim=True,addtext=True,secObj=secObj,thiObj=thiObj,
-                  fouObj=fouObj,format=format,mydir=mydir)
+                  myfontsize=myfontsize,band="2mm",cblim=True,addtext=True,secObj=secObj,
+                  thiObj=thiObj,fouObj=fouObj,format=format,mydir=mydir,indata=indata,
+                  inCont=ContLvls)
 
 def plot_visibility(mydate,skyobj,Coverage=0,elMin=40,mylabel="Target",
                     dpi=200,filename = "Visibility_Chart",format='png',
@@ -1129,7 +1196,7 @@ def plot_radecs(RaDecs,span=600,format='png',mydir=cwd):
     actSpan = np.max([(maxRA - minRA).value, (maxDEC - minDEC).value])
     if 2*span < actSpan*3600 + 6.25*60:
         print span, actSpan*3600 + 6.25*60
-        import pdb; pdb.set_trace()
+        pdb.set_trace()
         #raise Exception("Your plotting range (span) is too small")
     ### Maybe there is further optimizing to do here?
     
