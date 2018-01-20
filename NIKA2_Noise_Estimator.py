@@ -4,7 +4,8 @@ from astropy import wcs
 from astropy.io import fits
 from astropy import units as u
 from astropy.time import Time as APT
-from wcsaxes import WCSAxes        # http://wcsaxes.rtfd.org/
+from astropy.visualization.wcsaxes import WCSAxes       
+#from wcsaxes import WCSAxes        # http://wcsaxes.rtfd.org/
 import matplotlib.pyplot as plt
 import matplotlib.dates
 from matplotlib import colors
@@ -972,7 +973,8 @@ def ind_plots_cov(Coverage,map,filename="NIKA2_Coverage_map",target="Object",
 
     yaxoff = len(Coverage.nkotf)*0.025  # Hopefully allows for ~4 nkotf's
     fig = plt.figure(dpi=dpi,figsize=(8,8)); axpos=[0.2, 0.20-yaxoff, 0.7, 0.7]
-    ax = WCSAxes(fig, axpos, wcs=Coverage.w);fig.add_axes(ax)
+    #ax = subplot(fig, projection = wcs)
+    ax = WCSAxes(fig, axpos, wcs=Coverage.w); fig.add_axes(ax)
 #    cax = ax.imshow(map,interpolation='none',
 #                    norm=colors.LogNorm(vmin=mymin,vmax=mymax),cmap='bwr')
     if cblim == False:

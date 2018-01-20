@@ -40,7 +40,15 @@ precStart = False
 mydir = os.getcwd()    # If you want to specify a directory, do so here.
 
 
-
+#########################################################################
+###         ADVANCED VARIABLE (RECOMMENDED TO LEAVE AS IS)            ###
+#########################################################################
+### If you have a comparison fits file, which has contours at a certain
+### level, you can use this variable to supply the full path and file
+### name. CAUTION, this will require some user manipulation (to have the
+### right contours overplotted).
+### Comparison Files:
+infits = None
 
 #########################################################################
 # + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + + #
@@ -70,7 +78,7 @@ elStr = str(int(elMin))
 ###
 ### This plots 5 different maps:
 NNE.plot_coverage(Coverage,filename=target+"_above"+elStr,target=target,
-                  mydir=mydir)
+                  mydir=mydir,infits=infits)
 
 ### This makes one plot- the visibility of the object:
 NNE.plot_visibility(Coverage.date_obs,skyobj,Coverage,elMin=elMin,
@@ -85,7 +93,7 @@ NNE.hist_pas(Coverage,addname=target,mydir=mydir,isposang=True)
 NNE.make_fits(Coverage,target=target+"_full_night",mydir=mydir)
 
 ### Shelve the coverage for use later
-NNE.shelve_coverage(Coverage,filename='Shelved_Coverage_'+target+'.sav',
-                    mydir=mydir)
+#NNE.shelve_coverage(Coverage,filename='Shelved_Coverage_'+target+'.sav',
+#                    mydir=mydir)
 
 ########################################################################

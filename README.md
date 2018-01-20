@@ -1,11 +1,11 @@
 # NIKA2_Technical
 
 This repository was developed with Python 2.7.12 and IPython 2.4.1
-The repository works on Python versions XXX and IPython YYY
+The repository has been tested on a variety of Python 2.7 and IPython
+2.4 versions. Functionality beyond these versions is not guaranteed. 
 
 Third party packages used are:
 (1) Astropy: http://www.astropy.org/
-(2) WCSaxes: http://wcsaxes.rtfd.org/
 
 Upon using the routine, Astropy will download information from
 the US Naval Observatory (for AltAz / RaDec transformations).
@@ -35,7 +35,7 @@ lines from NIKA2_Example_Script:
 
 Etc...
 
-It is necessary to edit variables above L50 (Release Oct 29, 2017) in the
+It is necessary to edit variables above L45 (Release Jan 20, 2018) in the
 file <NIKA2_Example_Script.py> (unless, by chance, you want some of the
 same parameters).
 
