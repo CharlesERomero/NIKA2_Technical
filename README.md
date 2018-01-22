@@ -6,6 +6,9 @@ The repository has been tested on a variety of Python 2.7 and IPython
 
 Third party packages used are:
 (1) Astropy: http://www.astropy.org/
+(2) FITS_tools: http://fits-tools.readthedocs.io/en/latest/index.html
+
+Both should be installable with Anaconda or PIP.
 
 Upon using the routine, Astropy will download information from
 the US Naval Observatory (for AltAz / RaDec transformations).

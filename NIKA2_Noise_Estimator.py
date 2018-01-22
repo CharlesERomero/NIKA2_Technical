@@ -11,7 +11,6 @@ import matplotlib.dates
 from matplotlib import colors
 from matplotlib import colorbar as cb
 import pytz, datetime, os, pdb
-import FITS_tools.hcongrid as fth
 import shelve
 
 ################################################################################
@@ -1051,6 +1050,7 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
 
     indata = None
     if infits != None:
+        import FITS_tools.hcongrid as fth
         hdulist = fits.open(infits)
         header = Coverage.w.to_header()
         wgm = wcs.WCS(hdulist[0].header)
