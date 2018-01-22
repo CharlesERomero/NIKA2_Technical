@@ -1049,6 +1049,7 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
                   infits=None,inContours=np.array([0.99,0.999])):
 
     indata = None
+    ContLvls=[]
     if infits != None:
         import FITS_tools.hcongrid as fth
         hdulist = fits.open(infits)
@@ -1062,7 +1063,7 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
         hgm.remove('cunit4')
         #hgm.update(('WCSAXES',2,'Number of coordinate axes'))
         inmap = hdulist[0].data; goodmap=inmap.squeeze(); values=goodmap.flatten()
-        sordid = np.sort(values); mylen=len(sordid); ContLvls=[]
+        sordid = np.sort(values); mylen=len(sordid)
         ContLvls = [ sordid[int(mylen*c)] for c in inContours ]
         hgm.append(('NAXIS1',goodmap.shape[0],'Number of pixels along dimension1'))
         hgm.append(('NAXIS2',goodmap.shape[1],'Number of pixels along dimension2'))
