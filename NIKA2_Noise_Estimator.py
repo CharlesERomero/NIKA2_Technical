@@ -1048,7 +1048,7 @@ def plot_coverage(Coverage,filename="NIKA2_Coverage_map",target="Object",
                   secObj=None,thiObj=None,fouObj=None,format='png',mydir=cwd,
                   infits=None,inContours=np.array([0.99,0.999])):
 
-    indata = None
+    indata = []
     ContLvls=[]
     if infits != None:
         import FITS_tools.hcongrid as fth
@@ -1113,15 +1113,26 @@ def plot_visibility(mydate,skyobj,Coverage=0,elMin=40,mylabel="Target",
 
     #############################
 
-    bt30 = (np.max(mytimes[(objaltazs.alt.value > 30.0)]) - \
-           np.min(mytimes[(objaltazs.alt.value > 30.0)])).to("hour").value
-    bt40 = (np.max(mytimes[(objaltazs.alt.value > 40.0)]) - \
+    bt30 = 0; bt40 = 0; bt50 = 0; bteM = 0
+    if any(objaltazs.alt.value > 30.0):
+        bt30 = (np.max(mytimes[(objaltazs.alt.value > 30.0)]) - \
+                np.min(mytimes[(objaltazs.alt.value > 30.0)])).to("hour").value
+    if any(objaltazs.alt.value > 40.0):
+        bt40 = (np.max(mytimes[(objaltazs.alt.value > 40.0)]) - \
            np.min(mytimes[(objaltazs.alt.value > 40.0)])).to("hour").value
-    bt50 = (np.max(mytimes[(objaltazs.alt.value > 50.0)]) - \
-           np.min(mytimes[(objaltazs.alt.value > 50.0)])).to("hour").value
-    bteM = (np.max(mytimes[(objaltazs.alt.value > elMin)]) - \
-           np.min(mytimes[(objaltazs.alt.value > elMin)])).to("hour").value
+    if any(objaltazs.alt.value > 50.0):
+        bt50 = (np.max(mytimes[(objaltazs.alt.value > 50.0)]) - \
+                np.min(mytimes[(objaltazs.alt.value > 50.0)])).to("hour").value
+    if any(objaltazs.alt.value > bteM):
+        bteM = (np.max(mytimes[(objaltazs.alt.value > elMin)]) - \
+                np.min(mytimes[(objaltazs.alt.value > elMin)])).to("hour").value
 
+    if bteM == 0:
+        print 'Your source never rises above the minimum source elevation you requested.'
+        print 'Therefore, this code will not have run successfully.'
+        print 'Change the minimum elevation, or change the source.'
+
+        
     plt.figure(1,dpi=dpi,figsize=(8,8));    plt.clf();    fig1,ax1 = plt.subplots()
 
     date_arr = mytimes.datetime       # Convert to datetime array, for plotting

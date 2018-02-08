@@ -8,7 +8,7 @@ import os
 #########################################################################
 ### Define the coordinates and name of your object:
 obj_ra = apc.Angle('12h00m00s')
-obj_dec= apc.Angle('+80d00m00s')
+obj_dec= apc.Angle('+10d00m00s')
 skyobj = apc.SkyCoord(obj_ra, obj_dec, equinox = 'J2000')
 target='MyObjectName'
 
